@@ -29,6 +29,58 @@ Let your Claude Code instances find each other and talk — **across different h
 | Hostname tracking | No | Yes (`hostname` field on peers) |
 | Scope: `host` | No | Yes (filter peers by hostname) |
 
+## Prerequisites
+
+This project runs on **[Bun](https://bun.sh)** — a fast JavaScript/TypeScript runtime with built-in SQLite, HTTP server, and native TypeScript support. Bun installs alongside Node.js without conflicts, so your existing Claude Code setup stays untouched.
+
+You need the following on **each host** that will participate in the peers network:
+
+| Requirement | Why | How to check |
+|-------------|-----|--------------|
+| **Bun** >= 1.0 | Runtime for broker and MCP server | `bun --version` |
+| **Claude Code** >= v2.1.80 | Channel support for instant messaging | `claude --version` |
+| **claude.ai login** (OAuth) | Channels require subscription auth | `claude auth status` |
+| **curl** + **unzip** | Only needed if Bun isn't installed yet | `which curl unzip` |
+| **Network access** to broker | Peers must reach the broker's IP:port | `curl http://<broker-ip>:7899/health` |
+
+### Automated install script
+
+The included `install.sh` handles everything automatically:
+
+```bash
+git clone https://github.com/Smartxcode/claude-peers-mcp-multihost.git ~/claude-peers-mcp
+cd ~/claude-peers-mcp
+chmod +x install.sh
+./install.sh
+```
+
+The script will:
+1. Detect your OS (Linux or macOS)
+2. Check if Bun is installed — if not, install it automatically
+3. Verify that `curl` and `unzip` are available (needed for Bun installer)
+4. Run `bun install` to fetch project dependencies
+5. Print next steps for configuring the broker and MCP server
+
+> **Already have Bun?** The script detects it and skips straight to dependency installation.
+
+### Manual install
+
+If you prefer to install step by step:
+
+```bash
+# 1. Install Bun (skip if already installed)
+curl -fsSL https://bun.sh/install | bash
+source ~/.bashrc  # or restart your shell
+
+# 2. Verify Bun
+bun --version  # should print 1.x.x
+
+# 3. Clone and install dependencies
+git clone https://github.com/Smartxcode/claude-peers-mcp-multihost.git ~/claude-peers-mcp
+cd ~/claude-peers-mcp
+bun install
+```
+
 ## Quick start
 
 ### 1. Install (on each host)
@@ -36,7 +88,7 @@ Let your Claude Code instances find each other and talk — **across different h
 ```bash
 git clone https://github.com/Smartxcode/claude-peers-mcp-multihost.git ~/claude-peers-mcp
 cd ~/claude-peers-mcp
-bun install
+./install.sh
 ```
 
 ### 2. Start the broker (on ONE host)
@@ -54,7 +106,12 @@ Start the broker:
 CLAUDE_PEERS_TOKEN="your-token" bun broker.ts
 ```
 
-The broker listens on `0.0.0.0:7899` by default.
+The broker listens on `0.0.0.0:7899` by default. Verify it's running:
+
+```bash
+curl http://localhost:7899/health
+# {"status":"ok","peers":0}
+```
 
 ### 3. Register the MCP server (on each host)
 
@@ -170,9 +227,10 @@ Without the API key, Claude sets its own summary via the `set_summary` tool.
 
 ## Requirements
 
-- [Bun](https://bun.sh)
-- Claude Code v2.1.80+
-- claude.ai login (channels require it — API key auth won't work)
+- **[Bun](https://bun.sh)** >= 1.0 (auto-installed by `install.sh`)
+- **Claude Code** >= v2.1.80
+- **claude.ai login** (channels require OAuth — API key auth won't work)
+- **curl** + **unzip** (only for Bun installation)
 - Network connectivity between hosts and broker
 
 ## Credits
