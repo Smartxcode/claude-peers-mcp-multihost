@@ -4,32 +4,34 @@ globs: "*.ts, *.tsx, *.html, *.css, *.js, *.jsx, package.json"
 alwaysApply: false
 ---
 
-# claude-peers
+# claude-peers-mcp-multihost
 
-Peer discovery and messaging MCP channel for Claude Code instances.
+Peer discovery and messaging MCP channel for Claude Code instances — with cross-host support.
 
 ## Architecture
 
-- `broker.ts` — Singleton HTTP daemon on localhost:7899 + SQLite. Auto-launched by the MCP server.
-- `server.ts` — MCP stdio server, one per Claude Code instance. Connects to broker, exposes tools, pushes channel notifications.
-- `shared/types.ts` — Shared TypeScript types for broker API.
+- `broker.ts` — Singleton HTTP daemon on 0.0.0.0:7899 + SQLite. Supports bearer token auth. Uses heartbeat timeout for peer liveness (works across hosts).
+- `server.ts` — MCP stdio server, one per Claude Code instance. Connects to broker (local or remote), exposes tools, pushes channel notifications. Sends hostname on registration.
+- `shared/types.ts` — Shared TypeScript types for broker API (includes hostname field).
 - `shared/summarize.ts` — Auto-summary generation via gpt-5.4-nano.
-- `cli.ts` — CLI utility for inspecting broker state.
+- `cli.ts` — CLI utility for inspecting broker state (supports remote broker).
+
+## Multihost vs Local
+
+- Local mode (default): `CLAUDE_PEERS_HOST` not set → broker auto-launches on 127.0.0.1
+- Multihost mode: Set `CLAUDE_PEERS_HOST` to broker IP → connects to remote broker, no auto-launch
 
 ## Running
 
 ```bash
-# Start Claude Code with the channel:
-claude --dangerously-load-development-channels server:claude-peers
+# Broker (on one host):
+CLAUDE_PEERS_TOKEN=secret bun broker.ts
 
-# Or just add to .mcp.json and use as regular MCP (no channel push, but tools work):
-# { "claude-peers": { "command": "bun", "args": ["./server.ts"] } }
+# MCP server (on each host):
+CLAUDE_PEERS_HOST=10.10.10.65 CLAUDE_PEERS_TOKEN=secret claude --dangerously-load-development-channels server:claude-peers
 
 # CLI:
-bun cli.ts status
-bun cli.ts peers
-bun cli.ts send <peer-id> <message>
-bun cli.ts kill-broker
+CLAUDE_PEERS_HOST=10.10.10.65 CLAUDE_PEERS_TOKEN=secret bun cli.ts status
 ```
 
 ## Bun
@@ -65,77 +67,3 @@ test("hello world", () => {
   expect(1).toBe(1);
 });
 ```
-
-## Frontend
-
-Use HTML imports with `Bun.serve()`. Don't use `vite`. HTML imports fully support React, CSS, Tailwind.
-
-Server:
-
-```ts#index.ts
-import index from "./index.html"
-
-Bun.serve({
-  routes: {
-    "/": index,
-    "/api/users/:id": {
-      GET: (req) => {
-        return new Response(JSON.stringify({ id: req.params.id }));
-      },
-    },
-  },
-  // optional websocket support
-  websocket: {
-    open: (ws) => {
-      ws.send("Hello, world!");
-    },
-    message: (ws, message) => {
-      ws.send(message);
-    },
-    close: (ws) => {
-      // handle close
-    }
-  },
-  development: {
-    hmr: true,
-    console: true,
-  }
-})
-```
-
-HTML files can import .tsx, .jsx or .js files directly and Bun's bundler will transpile & bundle automatically. `<link>` tags can point to stylesheets and Bun's CSS bundler will bundle.
-
-```html#index.html
-<html>
-  <body>
-    <h1>Hello, world!</h1>
-    <script type="module" src="./frontend.tsx"></script>
-  </body>
-</html>
-```
-
-With the following `frontend.tsx`:
-
-```tsx#frontend.tsx
-import React from "react";
-import { createRoot } from "react-dom/client";
-
-// import .css files directly and it works
-import './index.css';
-
-const root = createRoot(document.body);
-
-export default function Frontend() {
-  return <h1>Hello, world!</h1>;
-}
-
-root.render(<Frontend />);
-```
-
-Then, run index.ts
-
-```sh
-bun --hot ./index.ts
-```
-
-For more information, read the Bun API docs in `node_modules/bun-types/docs/**.mdx`.
