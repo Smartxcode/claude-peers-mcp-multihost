@@ -23,6 +23,9 @@ import type {
   SendMessageRequest,
   PollMessagesRequest,
   PollMessagesResponse,
+  AcknowledgeMessagesRequest,
+  GetBufferedMessagesRequest,
+  GetBufferedMessagesResponse,
   Peer,
   Message,
 } from "./shared/types.ts";
@@ -68,10 +71,18 @@ db.run(`
     text TEXT NOT NULL,
     sent_at TEXT NOT NULL,
     delivered INTEGER NOT NULL DEFAULT 0,
+    acknowledged INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (from_id) REFERENCES peers(id),
     FOREIGN KEY (to_id) REFERENCES peers(id)
   )
 `);
+
+// Migration: add acknowledged column if upgrading from previous version
+try {
+  db.run("ALTER TABLE messages ADD COLUMN acknowledged INTEGER NOT NULL DEFAULT 0");
+} catch {
+  // Column already exists
+}
 
 // Clean up stale peers based on heartbeat timeout (works across hosts)
 function cleanStalePeers() {
@@ -135,6 +146,14 @@ const selectUndelivered = db.prepare(`
 
 const markDelivered = db.prepare(`
   UPDATE messages SET delivered = 1 WHERE id = ?
+`);
+
+const markAcknowledged = db.prepare(`
+  UPDATE messages SET acknowledged = 1 WHERE id = ?
+`);
+
+const selectBuffered = db.prepare(`
+  SELECT * FROM messages WHERE to_id = ? AND delivered = 1 AND acknowledged = 0 ORDER BY sent_at ASC
 `);
 
 // --- Generate peer ID ---
@@ -246,6 +265,18 @@ function handlePollMessages(body: PollMessagesRequest): PollMessagesResponse {
   return { messages };
 }
 
+function handleAcknowledgeMessages(body: AcknowledgeMessagesRequest): { ok: boolean } {
+  for (const msgId of body.message_ids) {
+    markAcknowledged.run(msgId);
+  }
+  return { ok: true };
+}
+
+function handleGetBufferedMessages(body: GetBufferedMessagesRequest): GetBufferedMessagesResponse {
+  const messages = selectBuffered.all(body.id) as Message[];
+  return { messages };
+}
+
 function handleUnregister(body: { id: string }): void {
   deletePeer.run(body.id);
 }
@@ -290,6 +321,10 @@ Bun.serve({
           return Response.json(handleSendMessage(body as SendMessageRequest));
         case "/poll-messages":
           return Response.json(handlePollMessages(body as PollMessagesRequest));
+        case "/acknowledge-messages":
+          return Response.json(handleAcknowledgeMessages(body as AcknowledgeMessagesRequest));
+        case "/get-buffered-messages":
+          return Response.json(handleGetBufferedMessages(body as GetBufferedMessagesRequest));
         case "/unregister":
           handleUnregister(body as { id: string });
           return Response.json({ ok: true });

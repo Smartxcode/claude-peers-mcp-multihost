@@ -24,6 +24,7 @@ import type {
   Peer,
   RegisterResponse,
   PollMessagesResponse,
+  GetBufferedMessagesResponse,
   Message,
 } from "./shared/types.ts";
 import {
@@ -148,10 +149,27 @@ let myId: PeerId | null = null;
 let myCwd = process.cwd();
 let myGitRoot: string | null = null;
 
+// --- Local message buffer (Fix 1) ---
+// Stores all messages received via polling, regardless of whether channel notification succeeds.
+// This ensures check_messages always has access to messages even if push delivery fails.
+
+interface BufferedMessage {
+  broker_msg_id: number;
+  from_id: string;
+  text: string;
+  sent_at: string;
+  from_hostname: string;
+  from_summary: string;
+  from_cwd: string;
+}
+
+const localMessageBuffer: BufferedMessage[] = [];
+const MAX_BUFFER_SIZE = 100;
+
 // --- MCP Server ---
 
 const mcp = new Server(
-  { name: "claude-peers", version: "0.2.0" },
+  { name: "claude-peers", version: "0.3.0" },
   {
     capabilities: {
       experimental: { "claude/channel": {} },
@@ -167,9 +185,11 @@ Available tools:
 - list_peers: Discover other Claude Code instances (scope: machine/host/directory/repo)
 - send_message: Send a message to another instance by ID
 - set_summary: Set a 1-2 sentence summary of what you're working on (visible to other peers)
-- check_messages: Manually check for new messages
+- check_messages: Manually check for new messages (IMPORTANT: always use this to read messages — channel push may not work in all environments)
 
-When you start, proactively call set_summary to describe what you're working on. This helps other instances understand your context.`,
+When you start, proactively call set_summary to describe what you're working on. This helps other instances understand your context.
+
+IMPORTANT: After sending a message to a peer, tell them to run check_messages to see it. Channel push notifications may not work in all Claude Code versions — check_messages is the reliable fallback.`,
   }
 );
 
@@ -375,20 +395,64 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         };
       }
       try {
-        const result = await brokerFetch<PollMessagesResponse>("/poll-messages", { id: myId });
-        if (result.messages.length === 0) {
+        // 1. Poll broker for any new messages not yet consumed by the polling loop
+        const freshResult = await brokerFetch<PollMessagesResponse>("/poll-messages", { id: myId });
+        for (const msg of freshResult.messages) {
+          localMessageBuffer.push({
+            broker_msg_id: msg.id,
+            from_id: msg.from_id,
+            text: msg.text,
+            sent_at: msg.sent_at,
+            from_hostname: "",
+            from_summary: "",
+            from_cwd: "",
+          });
+        }
+
+        // 2. Also fetch buffered messages (polled by loop but not yet acknowledged)
+        const bufferedResult = await brokerFetch<GetBufferedMessagesResponse>("/get-buffered-messages", { id: myId });
+        for (const msg of bufferedResult.messages) {
+          // Avoid duplicates — only add if not already in local buffer
+          if (!localMessageBuffer.some((m) => m.broker_msg_id === msg.id)) {
+            localMessageBuffer.push({
+              broker_msg_id: msg.id,
+              from_id: msg.from_id,
+              text: msg.text,
+              sent_at: msg.sent_at,
+              from_hostname: "",
+              from_summary: "",
+              from_cwd: "",
+            });
+          }
+        }
+
+        if (localMessageBuffer.length === 0) {
           return {
             content: [{ type: "text" as const, text: "No new messages." }],
           };
         }
-        const lines = result.messages.map(
-          (m) => `From ${m.from_id} (${m.sent_at}):\n${m.text}`
+
+        const lines = localMessageBuffer.map(
+          (m) => `From ${m.from_id}${m.from_hostname ? `@${m.from_hostname}` : ""} (${m.sent_at}):\n${m.text}`
         );
+        const count = localMessageBuffer.length;
+
+        // 3. Acknowledge all messages on the broker
+        const idsToAck = localMessageBuffer
+          .map((m) => m.broker_msg_id)
+          .filter((id) => id > 0);
+        if (idsToAck.length > 0) {
+          await brokerFetch("/acknowledge-messages", { id: myId, message_ids: idsToAck }).catch(() => {});
+        }
+
+        // 4. Clear local buffer after reading
+        localMessageBuffer.length = 0;
+
         return {
           content: [
             {
               type: "text" as const,
-              text: `${result.messages.length} new message(s):\n\n${lines.join("\n\n---\n\n")}`,
+              text: `${count} message(s):\n\n${lines.join("\n\n---\n\n")}`,
             },
           ],
         };
@@ -440,22 +504,53 @@ async function pollAndPushMessages() {
         // Non-critical, proceed without sender info
       }
 
-      // Push as channel notification — this is what makes it immediate
-      await mcp.notification({
-        method: "notifications/claude/channel",
-        params: {
-          content: msg.text,
-          meta: {
-            from_id: msg.from_id,
-            from_summary: fromSummary,
-            from_cwd: fromCwd,
-            from_hostname: fromHostname,
-            sent_at: msg.sent_at,
-          },
-        },
+      // Fix 1: Always buffer the message locally before attempting channel push
+      localMessageBuffer.push({
+        broker_msg_id: msg.id,
+        from_id: msg.from_id,
+        text: msg.text,
+        sent_at: msg.sent_at,
+        from_hostname: fromHostname,
+        from_summary: fromSummary,
+        from_cwd: fromCwd,
       });
+      if (localMessageBuffer.length > MAX_BUFFER_SIZE) {
+        localMessageBuffer.splice(0, localMessageBuffer.length - MAX_BUFFER_SIZE);
+      }
 
-      log(`Pushed message from ${msg.from_id}@${fromHostname}: ${msg.text.slice(0, 80)}`);
+      // Fix 2: Try channel notification with debug logging
+      let channelDelivered = false;
+      try {
+        await mcp.notification({
+          method: "notifications/claude/channel",
+          params: {
+            content: msg.text,
+            meta: {
+              from_id: msg.from_id,
+              from_summary: fromSummary,
+              from_cwd: fromCwd,
+              from_hostname: fromHostname,
+              sent_at: msg.sent_at,
+            },
+          },
+        });
+        channelDelivered = true;
+        log(`Channel push OK from ${msg.from_id}@${fromHostname}: ${msg.text.slice(0, 80)}`);
+      } catch (e) {
+        log(`Channel push FAILED from ${msg.from_id}@${fromHostname}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+
+      // Fix 3: Acknowledge on broker only if channel delivery succeeded
+      if (channelDelivered) {
+        try {
+          await brokerFetch("/acknowledge-messages", { id: myId, message_ids: [msg.id] });
+        } catch {
+          // Non-critical — message stays buffered on broker for check_messages fallback
+        }
+        // Remove from local buffer since it was delivered via channel
+        const idx = localMessageBuffer.findIndex((m) => m.broker_msg_id === msg.id);
+        if (idx !== -1) localMessageBuffer.splice(idx, 1);
+      }
     }
   } catch (e) {
     // Broker might be down temporarily, don't crash

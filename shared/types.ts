@@ -68,3 +68,18 @@ export interface PollMessagesRequest {
 export interface PollMessagesResponse {
   messages: Message[];
 }
+
+// --- Fix 3: Broker-side delivery tracking ---
+
+export interface AcknowledgeMessagesRequest {
+  id: PeerId;
+  message_ids: number[];
+}
+
+export interface GetBufferedMessagesRequest {
+  id: PeerId;
+}
+
+export interface GetBufferedMessagesResponse {
+  messages: Message[];
+}

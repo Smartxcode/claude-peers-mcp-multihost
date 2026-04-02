@@ -1,6 +1,6 @@
 {
   "name": "claude-peers-mcp-multihost",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Cross-host peer discovery and messaging for Claude Code instances",
   "module": "index.ts",
   "type": "module",
