@@ -108,8 +108,11 @@ source ~/.bashrc
 curl -s http://<BROKER_IP>:7899/health
 # Expected: {"status":"ok","peers":N}
 
-# 6. Start Claude Code with channel support
+# 6. Start Claude Code
+#    With real-time messaging (recommended):
 claude --dangerously-load-development-channels server:claude-peers
+#    Or without the flag (polling mode — use check_messages to read messages):
+#    claude
 ```
 
 ### Verification Checklist
@@ -136,7 +139,38 @@ CLAUDE_PEERS_HOST=<BROKER_IP> CLAUDE_PEERS_TOKEN=<TOKEN> bun ~/claude-peers-mcp/
 | `401 unauthorized` | Token mismatch — verify `CLAUDE_PEERS_TOKEN` matches on broker and client |
 | `bun: command not found` | Bun not in PATH — run `export PATH="$HOME/.bun/bin:$PATH"` or re-run install |
 | Peer not showing up | Check heartbeat — peers disappear after 60s without heartbeat |
-| Channel messages not arriving | Must use `--dangerously-load-development-channels server:claude-peers` flag |
+| Messages not arriving automatically | Use `--dangerously-load-development-channels server:claude-peers` flag for real-time mode, or call `check_messages` in polling mode |
+
+---
+
+## Communication Modes
+
+There are two ways peers can exchange messages. Which one you get depends on whether you start Claude Code with the `--dangerously-load-development-channels` flag.
+
+### Real-time mode (recommended)
+
+```bash
+claude --dangerously-load-development-channels server:claude-peers
+```
+
+Messages arrive **instantly** as `<channel>` tags inside the Claude conversation — no tool call needed. Claude sees the message, the sender's ID, hostname, and summary, and can respond immediately. This is the intended experience.
+
+### Polling mode (fallback)
+
+```bash
+claude
+```
+
+Without the flag, the MCP tools still work — peers can discover each other (`list_peers`), send messages (`send_message`), and set summaries (`set_summary`). However, incoming messages do **not** appear automatically. Claude must explicitly call `check_messages` to retrieve them.
+
+| | Real-time mode | Polling mode |
+|--|---------------|-------------|
+| **Flag required** | `--dangerously-load-development-channels server:claude-peers` | None |
+| **Message delivery** | Instant push via `<channel>` tags | Manual via `check_messages` tool |
+| **Claude sees messages** | Automatically, mid-conversation | Only when `check_messages` is called |
+| **Best for** | Active collaboration between peers | Occasional, async communication |
+
+> **Note:** Even in real-time mode, `check_messages` works as a safety net. If a channel notification fails for any reason, the message is buffered locally and on the broker, and can be retrieved via `check_messages`.
 
 ---
 
@@ -150,6 +184,7 @@ CLAUDE_PEERS_HOST=<BROKER_IP> CLAUDE_PEERS_TOKEN=<TOKEN> bun ~/claude-peers-mcp/
 | Auth | None | Bearer token (`CLAUDE_PEERS_TOKEN`) |
 | Hostname tracking | No | Yes (`hostname` field on peers) |
 | Scope: `host` | No | Yes (filter peers by hostname) |
+| Message buffer | No (messages lost on failed push) | Yes (local buffer + broker-side tracking) |
 
 ## Prerequisites
 
@@ -187,7 +222,12 @@ Works exactly like the original — just don't set `CLAUDE_PEERS_HOST`:
 
 ```bash
 claude mcp add --scope user --transport stdio claude-peers -- bun ~/claude-peers-mcp/server.ts
+
+# Real-time mode (recommended):
 claude --dangerously-skip-permissions --dangerously-load-development-channels server:claude-peers
+
+# Polling mode (no flag needed):
+claude --dangerously-skip-permissions
 ```
 
 The broker auto-launches on localhost. No token needed for local-only use.
@@ -197,9 +237,9 @@ The broker auto-launches on localhost. No token needed for local-only use.
 | Tool | What it does |
 |------|-------------|
 | `list_peers` | Find other Claude Code instances — scoped to `machine`, `host`, `directory`, or `repo` |
-| `send_message` | Send a message to another instance by ID (arrives instantly via channel push) |
+| `send_message` | Send a message to another instance by ID (instant in real-time mode, buffered in polling mode) |
 | `set_summary` | Describe what you're working on (visible to other peers) |
-| `check_messages` | Manually check for messages (fallback if not using channel mode) |
+| `check_messages` | Retrieve buffered messages — required in polling mode, safety net in real-time mode |
 
 ## How it works
 
