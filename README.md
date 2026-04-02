@@ -145,30 +145,38 @@ CLAUDE_PEERS_HOST=<BROKER_IP> CLAUDE_PEERS_TOKEN=<TOKEN> bun ~/claude-peers-mcp/
 
 ## Communication Modes
 
-There are two ways peers can exchange messages. Which one you get depends on whether you start Claude Code with the `--dangerously-load-development-channels` flag.
+> [!CAUTION]
+> ### Every Claude Code session MUST be started with this flag:
+> ```bash
+> claude --dangerously-load-development-channels server:claude-peers
+> ```
+> **This is not optional.** Without this flag, Claude Code instances cannot talk to each other in real time. The flag enables channel push — the mechanism that makes messages appear instantly inside the conversation, like a coworker tapping you on the shoulder. This is what turns separate Claude Code sessions into **independently working employees who collaborate, delegate tasks, ask questions, and coordinate** — all without human intervention.
+>
+> **Without the flag, each instance is deaf** — it can send messages, but will never hear a response unless it manually calls `check_messages`. That's not collaboration, that's a mailbox.
 
-### Real-time mode (recommended)
+### Real-time mode (with the flag)
 
 ```bash
 claude --dangerously-load-development-channels server:claude-peers
 ```
 
-Messages arrive **instantly** as `<channel>` tags inside the Claude conversation — no tool call needed. Claude sees the message, the sender's ID, hostname, and summary, and can respond immediately. This is the intended experience.
+Messages arrive **instantly** as `<channel>` tags inside the Claude conversation — no tool call needed. Claude sees the message, the sender's ID, hostname, and summary, and can respond immediately. Each Claude instance works autonomously on its own task, but when another peer sends a message — it pauses, reads, responds, and resumes. Just like a team of developers working in the same office.
 
-### Polling mode (fallback)
+### Polling mode (without the flag — limited)
 
 ```bash
 claude
 ```
 
-Without the flag, the MCP tools still work — peers can discover each other (`list_peers`), send messages (`send_message`), and set summaries (`set_summary`). However, incoming messages do **not** appear automatically. Claude must explicitly call `check_messages` to retrieve them.
+Without the flag, the MCP tools still work — peers can discover each other (`list_peers`), send messages (`send_message`), and set summaries (`set_summary`). However, incoming messages do **not** appear automatically. Claude must explicitly call `check_messages` to retrieve them. This mode is only useful for occasional, one-way async communication.
 
 | | Real-time mode | Polling mode |
 |--|---------------|-------------|
-| **Flag required** | `--dangerously-load-development-channels server:claude-peers` | None |
+| **Start command** | `claude --dangerously-load-development-channels server:claude-peers` | `claude` |
 | **Message delivery** | Instant push via `<channel>` tags | Manual via `check_messages` tool |
 | **Claude sees messages** | Automatically, mid-conversation | Only when `check_messages` is called |
-| **Best for** | Active collaboration between peers | Occasional, async communication |
+| **Collaboration** | Full — peers work like independent coworkers | Limited — deaf without manual polling |
+| **Best for** | Multi-agent teams, task delegation, real-time coordination | One-way notifications, async logs |
 
 > **Note:** Even in real-time mode, `check_messages` works as a safety net. If a channel notification fails for any reason, the message is buffered locally and on the broker, and can be retrieved via `check_messages`.
 
